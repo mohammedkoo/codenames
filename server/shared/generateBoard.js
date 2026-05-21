@@ -1,6 +1,16 @@
-import { words } from "../data/words"
+const words = [
+  "قمر",
+  "بحر",
+  "تفاحة",
+  "سيارة",
+  "كتاب",
+  "طبيب",
+  "مدرسة",
+  "هاتف",
+  "مطار"
+]
 
-export function generateBoard() {
+function generateBoard() {
   const shuffled = [...words].sort(() => Math.random() - 0.5)
 
   return shuffled.slice(0, 9).map((word, index) => {
@@ -17,3 +27,5 @@ export function generateBoard() {
     }
   })
 }
+
+module.exports = { generateBoard }

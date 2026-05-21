@@ -1,4 +1,4 @@
-function Card({ card, onReveal, isSpymaster }) {
+function Card({ card, onReveal, isSpymaster, disabled }) {
 const getColor = () => {
   if (card.revealed || isSpymaster) {
     if (card.type === "red") return "#dc2626"
@@ -15,6 +15,7 @@ const getColor = () => {
   return (
     <button
       onClick={onReveal}
+      disabled={disabled}
       style={{
         background: getColor(),
         border: "none",
@@ -22,7 +23,7 @@ const getColor = () => {
         padding: "30px",
         color: "white",
         fontSize: "28px",
-        cursor: "pointer",
+        cursor: disabled ? "not-allowed" : "pointer",
         transition: "0.3s"
       }}
     >
