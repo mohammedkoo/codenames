@@ -40,7 +40,25 @@ io.on("connection", (socket) => {
             teams: {
                 red: [],
                 blue: []
-            }
+            },
+            // Spymaster and clue system
+            spymasters: {
+                red: null,
+                blue: null
+            },
+            // current spymaster (socket id) for the team whose turn it is
+            currentSpymaster: null,
+            // current clue info
+            currentClue: {
+                word: null,
+                number: null
+            },
+            // lobby metadata
+            names: {
+                [socket.id]: null
+            },
+            host: socket.id,
+            roomState: "lobby"
         }
 
         socket.join(roomCode)
@@ -50,6 +68,18 @@ io.on("connection", (socket) => {
         socket.emit("turn-updated", rooms[roomCode].currentTurn)
         socket.emit("teams-updated", rooms[roomCode].teams)
         socket.emit("player-team", null)
+        socket.emit("spymasters-updated", rooms[roomCode].spymasters)
+        socket.emit("current-spymaster-updated", rooms[roomCode].currentSpymaster)
+        socket.emit("clue-updated", rooms[roomCode].currentClue)
+        socket.emit("lobby-updated", {
+            roomCode,
+            players: rooms[roomCode].players,
+            names: rooms[roomCode].names,
+            teams: rooms[roomCode].teams,
+            spymasters: rooms[roomCode].spymasters,
+            host: rooms[roomCode].host,
+            roomState: rooms[roomCode].roomState
+        })
 
         console.log("Room created:", roomCode)
     })
@@ -101,6 +131,23 @@ io.on("connection", (socket) => {
         const isBlue = room.teams.blue.includes(socket.id)
         const playerTeam = isRed ? "red" : (isBlue ? "blue" : null)
         socket.emit("player-team", playerTeam)
+        // Inform everyone about spymasters and current clue (sync)
+        io.to(roomCode).emit("spymasters-updated", room.spymasters)
+        // current spymaster is whichever spymaster belongs to the currentTurn
+        room.currentSpymaster = room.spymasters[room.currentTurn] || null
+        io.to(roomCode).emit("current-spymaster-updated", room.currentSpymaster)
+        io.to(roomCode).emit("clue-updated", room.currentClue)
+
+        // Emit lobby update to everyone in room
+        io.to(roomCode).emit("lobby-updated", {
+            roomCode,
+            players: room.players,
+            names: room.names,
+            teams: room.teams,
+            spymasters: room.spymasters,
+            host: room.host,
+            roomState: room.roomState
+        })
 
         console.log(`[SERVER] Player joined: socket.id=${socket.id}, roomCode=${roomCode}, playerTeam=${playerTeam}`)
 
@@ -137,7 +184,227 @@ io.on("connection", (socket) => {
         )
 
         // Send player-team to the player themselves
-        socket.emit("player-team", team === "red" || team === "blue" ? team : null)
+        const playerTeam = team === "red" || team === "blue" ? team : null
+        socket.emit("player-team", playerTeam)
+
+        // If the player who joined/changed team was previously a spymaster for the other team, clear that role
+        for (const t of ["red", "blue"]) {
+            if (room.spymasters[t] && !room.teams[t].includes(room.spymasters[t])) {
+                room.spymasters[t] = null
+            }
+        }
+
+        // Update current spymaster based on currentTurn
+        room.currentSpymaster = room.spymasters[room.currentTurn] || null
+
+        io.to(roomCode).emit("spymasters-updated", room.spymasters)
+        io.to(roomCode).emit("current-spymaster-updated", room.currentSpymaster)
+        io.to(roomCode).emit("clue-updated", room.currentClue)
+        io.to(roomCode).emit("lobby-updated", {
+            roomCode,
+            players: room.players,
+            names: room.names,
+            teams: room.teams,
+            spymasters: room.spymasters,
+            host: room.host,
+            roomState: room.roomState
+        })
+    })
+
+    // ─────────────────────────────────────────
+    // BECOME SPYMASTER
+    // ─────────────────────────────────────────
+
+    socket.on("become-spymaster", ({ roomCode, team }) => {
+        console.log(`[SERVER] Received become-spymaster request: socket.id=${socket.id}, roomCode=${roomCode}, team=${team}`)
+        const room = rooms[roomCode]
+
+        if (!room) {
+            console.warn(`[SERVER] become-spymaster failed: room ${roomCode} not found`)
+            socket.emit("become-spymaster-failed", "room-not-found")
+            return
+        }
+
+        if (team !== "red" && team !== "blue") {
+            socket.emit("become-spymaster-failed", "invalid-team")
+            return
+        }
+
+        // If player is not on the requested team, auto-join them
+        if (!room.teams[team].includes(socket.id)) {
+            // Remove from other team first
+            room.teams.red = room.teams.red.filter(id => id !== socket.id)
+            room.teams.blue = room.teams.blue.filter(id => id !== socket.id)
+            room.teams[team].push(socket.id)
+            console.log(`[SERVER] Auto-joined socket ${socket.id} to team ${team} while becoming spymaster`)
+            io.to(roomCode).emit("teams-updated", room.teams)
+            socket.emit("player-team", team)
+        }
+
+        // Prevent more than one spymaster per team
+        const existing = room.spymasters[team]
+        if (existing && existing !== socket.id) {
+            console.warn(`[SERVER] become-spymaster failed: team ${team} already has spymaster ${existing}`)
+            socket.emit("become-spymaster-failed", "already-has-spymaster")
+            return
+        }
+
+        // Assign spymaster for that team
+        room.spymasters[team] = socket.id
+
+        // Update current spymaster (for the team whose turn it is)
+        room.currentSpymaster = room.spymasters[room.currentTurn] || null
+
+        // Emit updates to everyone so state is synced server-side
+        io.to(roomCode).emit("spymasters-updated", room.spymasters)
+        io.to(roomCode).emit("current-spymaster-updated", room.currentSpymaster)
+        io.to(roomCode).emit("lobby-updated", {
+            roomCode,
+            players: room.players,
+            names: room.names,
+            teams: room.teams,
+            spymasters: room.spymasters,
+            host: room.host,
+            roomState: room.roomState
+        })
+
+        console.log(`[SERVER] become-spymaster success: socket ${socket.id} is now ${team} spymaster`) 
+
+        // Inform the player of their role and team (explicit)
+        socket.emit("player-role", { role: "spymaster", team })
+        socket.emit("player-team", team)
+    })
+
+    // ─────────────────────────────────────────
+    // SET NAME
+    // ─────────────────────────────────────────
+
+    socket.on("set-name", ({ roomCode, name }) => {
+        const room = rooms[roomCode]
+        if (!room) return
+        room.names[socket.id] = name
+        console.log(`[SERVER] set-name: socket=${socket.id}, name=${name}, room=${roomCode}`)
+        io.to(roomCode).emit("lobby-updated", {
+            roomCode,
+            players: room.players,
+            names: room.names,
+            teams: room.teams,
+            spymasters: room.spymasters,
+            host: room.host,
+            roomState: room.roomState
+        })
+        socket.emit("name-set", name)
+    })
+
+    // ─────────────────────────────────────────
+    // LEAVE TEAM
+    // ─────────────────────────────────────────
+
+    socket.on("leave-team", ({ roomCode }) => {
+        const room = rooms[roomCode]
+        if (!room) return
+
+        room.teams.red = room.teams.red.filter(id => id !== socket.id)
+        room.teams.blue = room.teams.blue.filter(id => id !== socket.id)
+
+        // Clear spymaster role if they were
+        for (const t of ["red", "blue"]) {
+            if (room.spymasters[t] === socket.id) room.spymasters[t] = null
+        }
+
+        io.to(roomCode).emit("teams-updated", room.teams)
+        io.to(roomCode).emit("spymasters-updated", room.spymasters)
+        io.to(roomCode).emit("lobby-updated", {
+            roomCode,
+            players: room.players,
+            names: room.names,
+            teams: room.teams,
+            spymasters: room.spymasters,
+            host: room.host,
+            roomState: room.roomState
+        })
+        socket.emit("player-team", null)
+    })
+
+    // ─────────────────────────────────────────
+    // START GAME
+    // ─────────────────────────────────────────
+
+    socket.on("start-game", ({ roomCode }) => {
+        const room = rooms[roomCode]
+        if (!room) return
+
+        // only host can start
+        if (room.host !== socket.id) {
+            socket.emit("start-game-failed", "not-host")
+            return
+        }
+
+        // must have spymasters and at least one player per team
+        if (!room.spymasters.red || !room.spymasters.blue) {
+            socket.emit("start-game-failed", "missing-spymasters")
+            return
+        }
+
+        if (room.teams.red.length === 0 || room.teams.blue.length === 0) {
+            socket.emit("start-game-failed", "teams-incomplete")
+            return
+        }
+
+        room.roomState = "playing"
+
+        // Broadcast start-game + current board and state
+        io.to(roomCode).emit("game-started", {
+            board: room.board,
+            currentTurn: room.currentTurn,
+            teams: room.teams,
+            spymasters: room.spymasters,
+            names: room.names
+        })
+
+        // also emit existing events for clients that listen separately
+        io.to(roomCode).emit("board-updated", room.board)
+        io.to(roomCode).emit("turn-updated", room.currentTurn)
+        io.to(roomCode).emit("teams-updated", room.teams)
+        io.to(roomCode).emit("spymasters-updated", room.spymasters)
+        io.to(roomCode).emit("lobby-updated", {
+            players: room.players,
+            names: room.names,
+            teams: room.teams,
+            spymasters: room.spymasters,
+            host: room.host,
+            roomState: room.roomState
+        })
+    })
+
+    // ─────────────────────────────────────────
+    // SEND CLUE
+    // ─────────────────────────────────────────
+
+    socket.on("send-clue", ({ roomCode, word, number }) => {
+        console.log(`[SERVER] Received send-clue: socket.id=${socket.id}, roomCode=${roomCode}, word=${word}, number=${number}`)
+        const room = rooms[roomCode]
+        if (!room) return
+        if (room.gameOver) return
+
+        // Only the spymaster for the team whose turn it is can send the clue
+        const currentTeam = room.currentTurn
+        const spymasterId = room.spymasters[currentTeam]
+        if (!spymasterId || spymasterId !== socket.id) {
+            socket.emit("send-clue-failed", "not-authorized")
+            return
+        }
+
+        // Validate inputs minimally
+        const clueWord = typeof word === "string" ? word.trim() : null
+        const clueNumber = Number.isInteger(number) ? number : parseInt(number, 10)
+
+        room.currentClue = {
+            word: clueWord || null,
+            number: Number.isNaN(clueNumber) ? null : clueNumber
+        }
+
+        io.to(roomCode).emit("clue-updated", room.currentClue)
     })
 
     // ─────────────────────────────────────────
@@ -156,6 +423,12 @@ io.on("connection", (socket) => {
 
         if (room.gameOver) {
             console.warn(`[SERVER] reveal-card blocked: game is over in roomCode=${roomCode}`)
+            return
+        }
+
+        // Spymasters cannot reveal cards
+        if (room.spymasters.red === socket.id || room.spymasters.blue === socket.id) {
+            console.warn(`[SERVER] reveal-card blocked: socket.id=${socket.id} is a spymaster and cannot reveal cards`)
             return
         }
 
@@ -297,6 +570,9 @@ io.on("connection", (socket) => {
                 "[SERVER] Turn switched to:",
                 room.currentTurn
             )
+            // update current spymaster for new turn
+            room.currentSpymaster = room.spymasters[room.currentTurn] || null
+            io.to(roomCode).emit("current-spymaster-updated", room.currentSpymaster)
         }
 
         // ─────────────────────────────────────
@@ -330,8 +606,40 @@ io.on("connection", (socket) => {
                 room.teams.red = room.teams.red.filter(id => id !== socket.id)
                 room.teams.blue = room.teams.blue.filter(id => id !== socket.id)
 
+                // Remove name entry
+                if (room.names && room.names[socket.id]) {
+                    delete room.names[socket.id]
+                }
+
+                // If they were a spymaster, clear that role
+                for (const t of ["red", "blue"]) {
+                    if (room.spymasters[t] === socket.id) {
+                        room.spymasters[t] = null
+                    }
+                }
+
+                // Update current spymaster for the active turn
+                room.currentSpymaster = room.spymasters[room.currentTurn] || null
+
+                // If host disconnected, assign a new host (first player) or null
+                if (room.host === socket.id) {
+                    room.host = room.players.length > 0 ? room.players[0] : null
+                    console.log(`[SERVER] New host for ${roomCode}: ${room.host}`)
+                }
+
                 io.to(roomCode).emit("player-joined", room.players)
                 io.to(roomCode).emit("teams-updated", room.teams)
+                io.to(roomCode).emit("spymasters-updated", room.spymasters)
+                io.to(roomCode).emit("current-spymaster-updated", room.currentSpymaster)
+                io.to(roomCode).emit("lobby-updated", {
+                    roomCode,
+                    players: room.players,
+                    names: room.names,
+                    teams: room.teams,
+                    spymasters: room.spymasters,
+                    host: room.host,
+                    roomState: room.roomState
+                })
 
                 console.log(`[SERVER] Cleaned up player ${socket.id} from room ${roomCode}`)
             }
