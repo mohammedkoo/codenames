@@ -46,6 +46,15 @@
     const [visualSpymasters, setVisualSpymasters] = useState(null)
     const [randomVisualName, setRandomVisualName] = useState("DEC_OP_SYS")
 
+    // Countdown and game speed states
+    const [timeLeft, setTimeLeft] = useState(60)
+    const [gameSpeed, setGameSpeed] = useState("medium")
+    const [isPortraitMobile, setIsPortraitMobile] = useState(false)
+
+    // Collapsible side panels states on mobile
+    const [redPanelCollapsed, setRedPanelCollapsed] = useState(true)
+    const [bluePanelCollapsed, setBluePanelCollapsed] = useState(true)
+
     useEffect(() => {
       socket.on("connect", () => {
         console.log("Connected:", socket.id)
@@ -102,6 +111,19 @@
         }
       })
 
+      socket.on("timer-updated", (time) => {
+        setTimeLeft(time)
+        if (time <= 5 && time > 0) {
+          gameAudio.playHover()
+        }
+      })
+
+      socket.on("send-clue-failed", (reason) => {
+        console.warn("[CLIENT] send-clue-failed:", reason)
+        gameAudio.playWrong()
+        alert(`فشل إرسال التلميح: ${reason === "invalid-number" ? "الرقم يجب أن يكون بين 0 و 10 فقط" : reason}`)
+      })
+
       socket.on("lobby-updated", (l) => {
         console.log("[CLIENT] lobby-updated:", l)
         if (!l) return
@@ -113,6 +135,16 @@
 
         if (l.roomCode) setRoomCode(l.roomCode)
         if (l.pack) setActivePack(l.pack)
+        if (l.speed) setGameSpeed(l.speed)
+
+        if (l.roomState === "playing") {
+          setScreen("game")
+        } else if (l.roomState === "lobby") {
+          if (screen === "game") {
+            setScreen("lobby")
+          }
+          setWinner(null) // Reset winner when returning to lobby!
+        }
       })
 
       socket.on("room-full", () => {
@@ -120,6 +152,7 @@
         gameAudio.playWrong();
         alert("عذراً، هذه الغرفة ممتلئة باللاعبين (الحد الأقصى 6 لاعبين)!")
         setScreen("home")
+        window.history.pushState(null, "", "/")
       })
 
       socket.on("name-set", (name) => {
@@ -134,6 +167,7 @@
         setSpymasters(data.spymasters || spymasters)
         setNames(data.names || names)
         setSelections({}) // Clear any previous selection visual overlays when game starts
+        setWinner(null) // Reset winner state for the new game!
         setScreen("game")
         gameAudio.playStart();
       })
@@ -141,7 +175,13 @@
       socket.on("start-game-failed", (reason) => {
         console.warn("[CLIENT] start-game-failed:", reason)
         gameAudio.playWrong();
-        alert(`فشل بدء اللعبة: ${reason === "missing-spymasters" ? "يجب تعيين قادة استخبارات لكلا الفريقين" : reason === "teams-incomplete" ? "يجب وجود لاعب واحد على الأقل في كل فريق" : reason}`)
+        alert(`فشل بدء اللعبة: ${
+          reason === "missing-spymasters" ? "يجب تعيين قادة استخبارات لكلا الفريقين" :
+          reason === "missing-operatives" ? "يجب وجود عميل ميداني (تخمين) واحد على الأقل في كل فريق" :
+          reason === "teams-incomplete" ? "يجب وجود لاعبين كافيين في كل فريق" :
+          reason === "not-host" ? "فقط منشئ الغرفة يمكنه بدء اللعبة" :
+          reason
+        }`)
       })
 
       socket.on("current-spymaster-updated", (id) => {
@@ -155,7 +195,11 @@
       socket.on("player-role", (roleObj) => {
         console.log("[CLIENT] player-role received:", roleObj)
         setPlayerRole(roleObj)
-        if (roleObj && roleObj.team) setMyTeam(roleObj.team)
+        if (roleObj && roleObj.team) {
+          setMyTeam(roleObj.team)
+          localStorage.setItem("codenames_team", roleObj.team)
+        }
+        localStorage.setItem("codenames_role", roleObj ? roleObj.role : "")
       })
 
       socket.on("become-spymaster-failed", (reason) => {
@@ -173,6 +217,7 @@
       socket.on("room-created", (code) => {
         console.log("[CLIENT] Received room-created event. Code:", code)
         setRoomCode(code)
+        window.history.pushState(null, "", `/room/${code}`)
         // Auto emit the saved name from localStorage/state
         const savedName = localStorage.getItem("codenames_agent_name");
         if (savedName) {
@@ -184,10 +229,21 @@
       socket.on("room-joined", (code) => {
         console.log("[CLIENT] Received room-joined event. Code:", code)
         setRoomCode(code)
+        window.history.pushState(null, "", `/room/${code}`)
         // Auto emit the saved name from localStorage/state
         const savedName = localStorage.getItem("codenames_agent_name");
         if (savedName) {
           socket.emit("set-name", { roomCode: code, name: savedName });
+        }
+
+        // Auto restore team and role!
+        const savedTeam = localStorage.getItem("codenames_team")
+        const savedRole = localStorage.getItem("codenames_role")
+        if (savedTeam === "red" || savedTeam === "blue") {
+          socket.emit("join-team", { roomCode: code, team: savedTeam })
+          if (savedRole === "spymaster") {
+            socket.emit("become-spymaster", { roomCode: code, team: savedTeam })
+          }
         }
         gameAudio.playJoin();
       })
@@ -201,6 +257,8 @@
         console.warn("[CLIENT] Received room-not-found event")
         gameAudio.playWrong();
         alert("غرفة اللعبة غير موجودة!")
+        setScreen("home")
+        window.history.pushState(null, "", "/")
       })
 
       socket.on("teams-updated", (newTeams) => {
@@ -211,6 +269,10 @@
       socket.on("player-team", (team) => {
         console.log("[CLIENT] Received player-team event. MyTeam:", team)
         setMyTeam(team)
+        localStorage.setItem("codenames_team", team || "")
+        if (!team) {
+          localStorage.setItem("codenames_role", "")
+        }
       })
 
       // Realtime Card Selection Events
@@ -261,8 +323,64 @@
         socket.off("selections-cleared")
         socket.off("room-full")
         socket.off("randomizing-started")
+        socket.off("timer-updated")
+        socket.off("send-clue-failed")
       }
     }, [currentTurn, teams, spymasters, names])
+
+    // Initial load and URL check
+    useEffect(() => {
+      const parts = window.location.pathname.split("/")
+      if (parts[1] === "room" && parts[2]) {
+        const code = parts[2].toUpperCase()
+        setJoinCode(code)
+        setRoomCode(code)
+        
+        const savedName = localStorage.getItem("codenames_agent_name")
+        if (savedName) {
+          socket.emit("join-room", code)
+          setScreen("lobby")
+        } else {
+          setPendingAction("join")
+          setNameInput("")
+          setShowNameModal(true)
+        }
+      }
+    }, [])
+
+    // Handle back/forward popstate
+    useEffect(() => {
+      const handlePopState = () => {
+        const parts = window.location.pathname.split("/")
+        if (parts[1] === "room" && parts[2]) {
+          const code = parts[2].toUpperCase()
+          setRoomCode(code)
+          socket.emit("join-room", code)
+        } else {
+          setRoomCode("")
+          setScreen("home")
+        }
+      }
+      window.addEventListener("popstate", handlePopState)
+      return () => window.removeEventListener("popstate", handlePopState)
+    }, [])
+
+    // Mobile Orientation Check
+    useEffect(() => {
+      const checkOrientation = () => {
+        const isPortrait = window.innerHeight > window.innerWidth
+        const isMobileWidth = window.innerWidth <= 768
+        setIsPortraitMobile(isPortrait && isMobileWidth)
+      }
+      
+      checkOrientation()
+      window.addEventListener("resize", checkOrientation)
+      window.addEventListener("orientationchange", checkOrientation)
+      return () => {
+        window.removeEventListener("resize", checkOrientation)
+        window.removeEventListener("orientationchange", checkOrientation)
+      }
+    }, [])
 
     // local visual shuffle simulation for team randomize roulette
     useEffect(() => {
@@ -385,8 +503,13 @@
     const sendClue = () => {
       if (!roomCode) return
       if (!clueWord || clueWord.trim() === "") return alert("الرجاء إدخال الكلمة المفتاحية للشفرة")
-      if (!clueNumber || isNaN(clueNumber)) return alert("الرجاء إدخال عدد البطاقات المستهدفة")
-      socket.emit("send-clue", { roomCode, word: clueWord.trim(), number: parseInt(clueNumber, 10) })
+      if (clueNumber === "" || isNaN(clueNumber)) return alert("الرجاء إدخال عدد البطاقات المستهدفة")
+      const num = parseInt(clueNumber, 10)
+      if (num < 0 || num > 10) {
+        alert("رقم التلميح يجب أن يكون بين 0 و 10 فقط!")
+        return
+      }
+      socket.emit("send-clue", { roomCode, word: clueWord.trim(), number: num })
       setClueWord("")
       setClueNumber("")
     }
@@ -423,9 +546,6 @@
       setPendingAction(null)
     }
 
-    // Dynamic grid template columns
-    const gridColsClass = board.length === 27 ? "grid-cols-3 md:grid-cols-9" : (board.length === 25 ? "grid-cols-5" : "grid-cols-3")
-
     // Sidebar Red Team Component
     const RedTeamPanel = (() => {
       // Override team data during randomization wheel animation
@@ -433,16 +553,16 @@
       const activeOperatives = isRandomizing && visualTeams ? visualTeams.red : (teams.red || []);
       
       return (
-        <div className={`order-2 lg:order-none lg:sticky lg:top-6 glass-panel-red rounded-3xl p-6 border transition-all duration-300 relative overflow-hidden flex flex-col gap-5 ${
+        <div className={`order-2 lg:order-none lg:sticky lg:top-6 glass-panel-red rounded-3xl p-3 border transition-all duration-300 relative overflow-hidden flex flex-col gap-3 ${
           currentTurn === "red" ? "pulse-red border-red-500/40 shadow-[0_0_20px_rgba(255,0,85,0.15)]" : "border-red-500/10 opacity-70"
         }`}>
-          <div className="absolute top-0 right-0 w-24 h-24 bg-red-500/5 blur-2xl pointer-events-none"></div>
+          <div className="absolute top-0 right-0 w-16 h-16 bg-red-500/5 blur-2xl pointer-events-none"></div>
           
-          <div className="flex justify-between items-center border-b border-red-500/20 pb-2.5">
-            <span className="text-lg font-black tracking-wide text-red-400 glow-text-red">الفريق الأحمر</span>
+          <div className="flex justify-between items-center border-b border-red-500/20 pb-2">
+            <span className="text-sm font-black tracking-wide text-red-400 glow-text-red">الفريق الأحمر</span>
             {screen === "game" && (
-              <span className="text-xs font-bold text-red-500 font-orbitron bg-red-500/10 px-2 py-0.5 rounded border border-red-500/20">
-                {redRemaining} شفرة متبقية
+              <span className="text-[10px] font-bold text-red-500 font-orbitron bg-red-500/10 px-1.5 py-0.5 rounded border border-red-500/20">
+                {redRemaining} متبقية
               </span>
             )}
           </div>
@@ -462,7 +582,7 @@
           {/* Operatives Red */}
           <div>
             <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider mb-2 block font-cairo">العملاء الميدانيون</span>
-            <div className="flex flex-col gap-2 max-h-[220px] overflow-y-auto">
+            <div className="flex flex-col gap-1.5 max-h-[160px] overflow-y-auto">
               {activeOperatives.filter(id => id !== activeSpymaster).length > 0 ? (
                 activeOperatives.filter(id => id !== activeSpymaster).map(id => (
                   <PlayerCard key={id} name={names[id] || id} role="operative" team="red" isYou={id === socket.id} />
@@ -556,16 +676,16 @@
       const activeOperatives = isRandomizing && visualTeams ? visualTeams.blue : (teams.blue || []);
 
       return (
-        <div className={`order-3 lg:order-none lg:sticky lg:top-6 glass-panel-blue rounded-3xl p-6 border transition-all duration-300 relative overflow-hidden flex flex-col gap-5 ${
+        <div className={`order-3 lg:order-none lg:sticky lg:top-6 glass-panel-blue rounded-3xl p-3 border transition-all duration-300 relative overflow-hidden flex flex-col gap-3 ${
           currentTurn === "blue" ? "pulse-blue border-cyan-500/40 shadow-[0_0_20px_rgba(0,240,255,0.15)]" : "border-cyan-500/10 opacity-80"
         }`}>
-          <div className="absolute top-0 left-0 w-24 h-24 bg-cyan-500/5 blur-2xl pointer-events-none"></div>
+          <div className="absolute top-0 left-0 w-16 h-16 bg-cyan-500/5 blur-2xl pointer-events-none"></div>
 
-          <div className="flex justify-between items-center border-b border-cyan-500/20 pb-2.5">
-            <span className="text-lg font-black tracking-wide text-cyan-400 glow-text-blue">الفريق الأزرق</span>
+          <div className="flex justify-between items-center border-b border-cyan-500/20 pb-2">
+            <span className="text-sm font-black tracking-wide text-cyan-400 glow-text-blue">الفريق الأزرق</span>
             {screen === "game" && (
-              <span className="text-xs font-bold text-cyan-400 font-orbitron bg-cyan-500/10 px-2 py-0.5 rounded border border-cyan-500/20">
-                {blueRemaining} شفرة متبقية
+              <span className="text-[10px] font-bold text-cyan-400 font-orbitron bg-cyan-500/10 px-1.5 py-0.5 rounded border border-cyan-500/20">
+                {blueRemaining} متبقية
               </span>
             )}
           </div>
@@ -585,7 +705,7 @@
           {/* Operatives Blue */}
           <div>
             <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider mb-2 block font-cairo">العملاء الميدانيون</span>
-            <div className="flex flex-col gap-2 max-h-[220px] overflow-y-auto">
+            <div className="flex flex-col gap-1.5 max-h-[160px] overflow-y-auto">
               {activeOperatives.filter(id => id !== activeSpymaster).length > 0 ? (
                 activeOperatives.filter(id => id !== activeSpymaster).map(id => (
                   <PlayerCard key={id} name={names[id] || id} role="operative" team="blue" isYou={id === socket.id} />
@@ -678,6 +798,32 @@
         <div className="scanline"></div>
 
         {/* ====================================================
+            MOBILE PORTRAIT WARNING OVERLAY
+            ==================================================== */}
+        {isPortraitMobile && (
+          <div className="fixed inset-0 z-[99999] bg-slate-950/98 backdrop-blur-xl flex flex-col items-center justify-center p-8 text-center">
+            <div className="relative">
+              {/* Rotating border ring */}
+              <div className="w-24 h-24 rounded-full border-4 border-t-cyan-400 border-r-transparent border-b-red-500 border-l-transparent animate-spin mb-6 mx-auto"></div>
+              <div className="absolute inset-0 flex items-center justify-center mb-6">
+                <svg className="w-10 h-10 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2zM12 9v4" />
+                </svg>
+              </div>
+            </div>
+            <h2 className="text-xl font-black text-white mb-3 font-cairo">تدوير الشاشة مطلوب</h2>
+            <p className="text-sm text-slate-400 font-cairo leading-relaxed max-w-xs">
+              للحصول على أفضل تجربة لعب، يُرجى تدوير جهازك إلى الوضع الأفقي
+            </p>
+            <div className="mt-6 flex items-center gap-2 text-xs text-cyan-400 font-bold font-orbitron uppercase tracking-widest animate-pulse">
+              <span className="h-1.5 w-1.5 rounded-full bg-cyan-400"></span>
+              <span>ROTATE DEVICE — LANDSCAPE MODE</span>
+              <span className="h-1.5 w-1.5 rounded-full bg-cyan-400"></span>
+            </div>
+          </div>
+        )}
+
+        {/* ====================================================
             AGENT NAME MODAL OVERLAY (Only triggered on Create/Join)
             ==================================================== */}
         {showNameModal && (
@@ -743,22 +889,22 @@
         )}
 
         {/* Global Cinematic Header */}
-        <header className="relative z-10 w-full pt-8 pb-4 px-4 text-center flex flex-col items-center">
-          <div className="relative inline-block mb-1.5 group">
-            <h1 className="text-4xl md:text-6xl font-black font-orbitron tracking-widest bg-gradient-to-r from-cyan-400 via-white to-red-500 bg-clip-text text-transparent drop-shadow-[0_0_15px_rgba(6,182,212,0.25)]">
+        <header className="relative z-10 w-full pt-3 pb-1.5 px-4 text-center flex flex-col items-center">
+          <div className="relative inline-block mb-1 group">
+            <h1 className="text-2xl md:text-3xl font-black font-orbitron tracking-widest bg-gradient-to-r from-cyan-400 via-white to-red-500 bg-clip-text text-transparent drop-shadow-[0_0_10px_rgba(6,182,212,0.25)]">
               CODENAMES
             </h1>
-            <div className="h-0.5 w-full bg-gradient-to-r from-transparent via-cyan-500/40 to-transparent mt-1 group-hover:scale-x-110 transition-transform duration-700"></div>
+            <div className="h-0.5 w-full bg-gradient-to-r from-transparent via-cyan-500/40 to-transparent mt-0.5 group-hover:scale-x-110 transition-transform duration-700"></div>
           </div>
-          <p className="text-[11px] md:text-xs text-slate-400 font-bold tracking-widest uppercase flex items-center gap-2">
+          <p className="text-[10px] text-slate-400 font-bold tracking-widest uppercase hidden sm:flex items-center gap-2">
             <span>نظام الاتصالات التكتيكي للعملاء</span>
-            <span className="h-1.5 w-1.5 rounded-full bg-cyan-400 animate-pulse"></span>
+            <span className="h-1 w-1 rounded-full bg-cyan-400 animate-pulse"></span>
             <span>CYBER SPY CONTROL</span>
           </p>
         </header>
 
         {/* Main Body Layout */}
-        <main className="flex-1 w-full max-w-7xl mx-auto px-4 py-6 relative z-10 flex flex-col justify-center">
+        <main className="flex-1 w-full max-w-[1450px] mx-auto px-4 py-6 relative z-10 flex flex-col justify-center">
           
           {/* ====================================================
               1) HOME SCREEN (Now loaded immediately without blockage)
@@ -899,7 +1045,7 @@
               </div>
 
               {/* THREE-COLUMN GRID (Lobby panels flanking center console) */}
-              <div className="w-full grid grid-cols-1 lg:grid-cols-[300px_1fr_300px] gap-6 items-start">
+              <div className="w-full grid grid-cols-1 lg:grid-cols-[210px_1fr_210px] gap-4 items-start">
                 
                 {/* 1) RED TEAM Panel (Displays right in RTL) */}
                 <div className="animate-fade-in-up animate-delay-100">
@@ -1043,6 +1189,72 @@
                     </div>
                   </div>
 
+                  {/* section C2: Game Speed Selector */}
+                  <div className="glass-panel p-6 rounded-3xl border border-slate-800 relative overflow-hidden panel-depth">
+                    <h3 className="text-sm font-bold text-slate-400 mb-3 font-cairo border-b border-slate-800 pb-2">سرعة اللعب (مؤقت الدور) // GAME SPEED</h3>
+                    <div className="grid grid-cols-3 gap-3">
+                      <button
+                        onClick={() => {
+                          if (host !== socket.id) return;
+                          socket.emit("set-game-speed", { roomCode, speed: "fast" });
+                        }}
+                        onMouseEnter={() => gameAudio.playHover()}
+                        className={`p-3 rounded-2xl text-center text-xs font-black transition-all ${
+                          host === socket.id ? "cursor-pointer" : "opacity-80"
+                        } ${
+                          gameSpeed === "fast"
+                            ? "bg-red-950/40 border-2 border-red-500/50 text-red-400 shadow-[0_0_12px_rgba(239,68,68,0.15)] animate-pulse"
+                            : "bg-slate-950 border border-slate-900 text-slate-400 hover:border-slate-800"
+                        }`}
+                      >
+                        <span className="flex flex-col items-center justify-center gap-1">
+                          <span className="font-bold">سريع</span>
+                          <span className="text-[10px] text-slate-500">30 ثانية</span>
+                        </span>
+                      </button>
+                      
+                      <button
+                        onClick={() => {
+                          if (host !== socket.id) return;
+                          socket.emit("set-game-speed", { roomCode, speed: "medium" });
+                        }}
+                        onMouseEnter={() => gameAudio.playHover()}
+                        className={`p-3 rounded-2xl text-center text-xs font-black transition-all ${
+                          host === socket.id ? "cursor-pointer" : "opacity-80"
+                        } ${
+                          gameSpeed === "medium"
+                            ? "bg-amber-950/40 border-2 border-amber-500/50 text-amber-400 shadow-[0_0_12px_rgba(245,158,11,0.15)] animate-pulse"
+                            : "bg-slate-950 border border-slate-900 text-slate-400 hover:border-slate-800"
+                        }`}
+                      >
+                        <span className="flex flex-col items-center justify-center gap-1">
+                          <span className="font-bold">متوسط</span>
+                          <span className="text-[10px] text-slate-500">60 ثانية</span>
+                        </span>
+                      </button>
+                      
+                      <button
+                        onClick={() => {
+                          if (host !== socket.id) return;
+                          socket.emit("set-game-speed", { roomCode, speed: "slow" });
+                        }}
+                        onMouseEnter={() => gameAudio.playHover()}
+                        className={`p-3 rounded-2xl text-center text-xs font-black transition-all ${
+                          host === socket.id ? "cursor-pointer" : "opacity-80"
+                        } ${
+                          gameSpeed === "slow"
+                            ? "bg-cyan-950/40 border-2 border-cyan-500/50 text-cyan-400 shadow-[0_0_12px_rgba(6,182,212,0.15)] animate-pulse"
+                            : "bg-slate-950 border border-slate-900 text-slate-400 hover:border-slate-800"
+                        }`}
+                      >
+                        <span className="flex flex-col items-center justify-center gap-1">
+                          <span className="font-bold">بطيء</span>
+                          <span className="text-[10px] text-slate-500">90 ثانية</span>
+                        </span>
+                      </button>
+                    </div>
+                  </div>
+
                   {/* section D: Tactical Briefing */}
                   <div className="glass-panel p-6 rounded-3xl border border-slate-800 relative overflow-hidden panel-depth text-right">
                     <h3 className="text-sm font-bold text-slate-400 mb-3 font-cairo border-b border-slate-800 pb-2">التوجيهات التكتيكية للمهمة // TACTICAL BRIEFING</h3>
@@ -1141,53 +1353,75 @@
             <div className="w-full flex flex-col gap-6 animate-fade-in">
               
               {/* GAME STATE HUD TOP PANEL */}
-              <div className="glass-panel p-5 rounded-2xl border border-slate-800/80 flex flex-col md:flex-row items-center justify-between gap-4">
-                
-                {/* CURRENT TURN NOTIFICATION */}
-                <div className="flex items-center gap-4 w-full md:w-auto">
-                  <div className="flex flex-col items-start">
-                    <span className="text-[10px] uppercase font-bold text-slate-400">شفرة الدور الحالي</span>
-                    <div className="flex items-center gap-3.5">
-                      {currentTurn === "red" ? (
-                        <span className="text-2xl font-black font-cairo text-red-500 glow-text-red tracking-wide animate-pulse flex items-center gap-2">
-                          <span className="h-3 w-3 rounded-full bg-red-500 animate-ping"></span>
-                          مهمة الفريق الأحمر
-                        </span>
-                      ) : (
-                        <span className="text-2xl font-black font-cairo text-cyan-400 glow-text-blue tracking-wide animate-pulse flex items-center gap-2">
-                          <span className="h-3 w-3 rounded-full bg-cyan-400 animate-ping"></span>
-                          مهمة الفريق الأزرق
-                        </span>
-                      )}
-                    </div>
-                  </div>
+              <div className="glass-panel py-2 px-4 rounded-2xl border border-slate-800/80 flex flex-wrap items-center justify-between gap-3 relative overflow-hidden">
+                {/* Auth Turn Timer Progress Bar */}
+                <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-slate-900/50">
+                  <div
+                    className={`h-full transition-all duration-1000 ${
+                      currentTurn === "red"
+                        ? "bg-red-500 shadow-[0_0_10px_#ff0055]"
+                        : "bg-cyan-400 shadow-[0_0_10px_#00f0ff]"
+                    } ${timeLeft <= 10 ? "animate-pulse bg-red-650 shadow-[0_0_12px_#ff0000]" : ""}`}
+                    style={{
+                      width: `${(timeLeft / (gameSpeed === "fast" ? 30 : gameSpeed === "slow" ? 90 : 60)) * 100}%`,
+                    }}
+                  />
                 </div>
 
-                {/* CURRENT ACTIVE CLUE OVERVIEW (Visor) */}
-                <div className="flex-1 max-w-md bg-slate-950/40 border border-slate-900 px-6 py-2.5 rounded-2xl text-center">
-                  <span className="text-[9px] tracking-widest text-slate-400 font-bold block mb-1 uppercase">الإشارة التوجيهية الحالية // CLUE SIGNAL</span>
+                {/* Team & Timer Combined */}
+                <div className="flex items-center gap-2">
+                  {currentTurn === "red" ? (
+                    <span className="text-base font-black text-red-500 glow-text-red flex items-center gap-1.5 leading-none">
+                      <span className="h-1.5 w-1.5 rounded-full bg-red-500 animate-ping"></span>
+                      دور الفريق الأحمر
+                    </span>
+                  ) : (
+                    <span className="text-base font-black text-cyan-400 glow-text-blue flex items-center gap-1.5 leading-none">
+                      <span className="h-1.5 w-1.5 rounded-full bg-cyan-400 animate-ping"></span>
+                      دور الفريق الأزرق
+                    </span>
+                  )}
+                  <span className={`text-sm font-bold font-orbitron px-2 py-0.5 rounded-lg bg-slate-950 border border-slate-900 leading-none ${
+                    timeLeft <= 10 ? "text-red-500 glow-text-red animate-pulse border-red-500/30" : "text-slate-355"
+                  }`}>
+                    {timeLeft}ث
+                  </span>
+                </div>
+
+                {/* Clue Signal (Compact layout) */}
+                <div className="flex items-center gap-2 bg-slate-950/40 border border-slate-900/80 px-3 py-1 rounded-xl min-h-[34px]">
+                  <span className="text-[9px] tracking-wider text-slate-500 font-bold uppercase font-orbitron">CLUE:</span>
                   {currentClue && currentClue.word ? (
-                    <div className="flex items-center justify-center gap-2">
-                      <span className="text-lg font-black text-white px-3 py-1 rounded-xl bg-slate-900 border border-slate-800 shadow-md">
+                    <div className="flex items-center gap-1">
+                      <span className="text-xs font-black text-white px-2 py-0.5 rounded-lg bg-slate-900 border border-slate-800">
                         {currentClue.word}
                       </span>
-                      <span className="text-lg font-black font-orbitron text-cyan-400 px-3 py-1 rounded-xl bg-slate-900 border border-slate-800 shadow-md glow-text-blue">
+                      <span className="text-xs font-black font-orbitron text-cyan-400 px-2 py-0.5 rounded-lg bg-slate-900 border border-slate-800 glow-text-blue">
                         {currentClue.number}
                       </span>
                     </div>
                   ) : (
-                    <span className="text-slate-500 font-bold text-xs tracking-wide animate-pulse font-cairo">
-                      بانتظار بث الشفرة التوجيهية من قائد الاستخبارات...
+                    <span className="text-slate-600 font-bold text-[10px] animate-pulse">
+                      بانتظار التلميح...
                     </span>
+                  )}
+
+                  {/* End Turn button */}
+                  {myTeam === currentTurn && playerRole && playerRole.role === "operative" && !winner && currentClue && currentClue.word && (
+                    <button
+                      onClick={() => socket.emit("end-turn", { roomCode })}
+                      onMouseEnter={() => gameAudio.playHover()}
+                      className="mr-2 py-0.5 px-2 rounded border border-red-500/20 hover:border-red-500/40 bg-red-950/20 text-red-400 hover:text-red-200 text-[10px] font-black transition-all cursor-pointer"
+                    >
+                      إنهاء الدور ✓
+                    </button>
                   )}
                 </div>
 
-                {/* CURRENT PLAYER ROLE & EDIT IDENTITY */}
-                <div className="flex items-center gap-3">
-                  <div className="text-right flex flex-col items-end">
-                    <span className="text-[9px] text-slate-400 font-bold uppercase">العميل الحالي</span>
-                    <span className="text-xs font-black text-cyan-400 font-orbitron">{agentName}</span>
-                  </div>
+                {/* User Info (Compact) */}
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] text-slate-500">العميل:</span>
+                  <span className="text-[10px] font-bold font-orbitron text-cyan-400">{agentName}</span>
                   <button
                     onClick={() => {
                       const newName = window.prompt("تعديل اسم العميل الرمزي:", agentName);
@@ -1201,45 +1435,53 @@
                       }
                     }}
                     onMouseEnter={() => gameAudio.playHover()}
-                    className="p-1 px-2.5 rounded-lg bg-slate-900 border border-slate-800 text-[10px] text-slate-400 hover:text-white transition-all font-bold cursor-pointer"
+                    className="py-0.5 px-2 rounded bg-slate-900 border border-slate-850 text-[9px] text-slate-500 hover:text-white transition-all cursor-pointer"
                   >
                     تعديل
                   </button>
                 </div>
-
               </div>
 
               {/* CLUE ENTRY TERMINAL FOR ACTIVE SPYMASTER ONLY */}
               {roomCode && playerRole && playerRole.role === "spymaster" && myTeam === currentTurn && currentSpymaster === socket.id && (
-                <div className="glass-panel p-5 rounded-2xl border border-amber-500/30 bg-amber-950/5 flex flex-col sm:flex-row items-center justify-center gap-4 animate-pulse">
-                  <span className="text-sm font-bold text-amber-400 font-cairo text-center sm:text-right">
-                    قائد الاستخبارات: بث إشارة توجيهية لفريقك
-                  </span>
-                  
-                  <div className="flex items-center gap-3 w-full sm:w-auto">
+                <div className="glass-panel rounded-2xl border border-amber-500/40 bg-amber-950/10 overflow-hidden shadow-[0_0_30px_rgba(245,158,11,0.08)]">
+                  {/* Header strip */}
+                  <div className="flex items-center gap-2 px-5 py-2.5 bg-amber-500/10 border-b border-amber-500/20">
+                    <span className="h-2 w-2 rounded-full bg-amber-400 animate-pulse"></span>
+                    <span className="text-[10px] font-black text-amber-400 font-orbitron uppercase tracking-widest">SPYMASTER BROADCAST — قائد الاستخبارات</span>
+                  </div>
+                  {/* Input row */}
+                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 p-4">
                     <input
                       type="text"
                       value={clueWord}
                       onChange={(e) => setClueWord(e.target.value)}
-                      placeholder="الرمز المشفر (كلمة)..."
-                      className="flex-1 sm:w-48 py-2 px-4 rounded-xl bg-slate-950 border border-slate-800 text-sm focus:outline-none focus:border-amber-500 text-white text-center font-cairo"
+                      onKeyDown={(e) => e.key === 'Enter' && sendClue()}
+                      placeholder="الكلمة المفتاحية..."
+                      className="flex-1 py-2.5 px-4 rounded-xl bg-slate-950 border border-amber-500/20 focus:border-amber-400 focus:outline-none focus:shadow-[0_0_12px_rgba(245,158,11,0.15)] text-white text-sm text-center font-cairo transition-all placeholder-slate-600"
                     />
-                    <input
-                      type="number"
-                      value={clueNumber}
-                      onChange={(e) => setClueNumber(e.target.value)}
-                      placeholder="العدد..."
-                      className="w-20 py-2 px-3 rounded-xl bg-slate-950 border border-slate-800 text-sm focus:outline-none focus:border-amber-500 text-white font-orbitron text-center"
-                      min="1"
-                      max="9"
-                    />
-                    <button
-                      onClick={sendClue}
-                      onMouseEnter={() => gameAudio.playHover()}
-                      className="py-2 px-5 rounded-xl bg-gradient-to-r from-amber-600 to-amber-700 hover:from-amber-550 hover:to-amber-650 text-slate-950 text-sm font-extrabold tracking-wide transition-all shadow-[0_0_12px_rgba(245,158,11,0.2)] cursor-pointer font-cairo"
-                    >
-                      بث الشفرة
-                    </button>
+                    <div className="flex items-center gap-3">
+                      <input
+                        type="number"
+                        value={clueNumber}
+                        onChange={(e) => setClueNumber(e.target.value)}
+                        onKeyDown={(e) => e.key === 'Enter' && sendClue()}
+                        placeholder="0–10"
+                        className="w-20 py-2.5 px-3 rounded-xl bg-slate-950 border border-amber-500/20 focus:border-amber-400 focus:outline-none focus:shadow-[0_0_12px_rgba(245,158,11,0.15)] text-white font-orbitron text-center text-sm transition-all placeholder-slate-600"
+                        min="0"
+                        max="10"
+                      />
+                      <button
+                        onClick={sendClue}
+                        onMouseEnter={() => gameAudio.playHover()}
+                        className="flex-1 sm:flex-none flex items-center justify-center gap-2 py-2.5 px-6 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-550 text-slate-950 text-sm font-black tracking-wide transition-all shadow-[0_4px_16px_rgba(245,158,11,0.25)] hover:shadow-[0_0_24px_rgba(245,158,11,0.45)] cursor-pointer font-cairo active:scale-95"
+                      >
+                        <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+                        </svg>
+                        <span>بث الشفرة</span>
+                      </button>
+                    </div>
                   </div>
                 </div>
               )}
@@ -1250,28 +1492,39 @@
                   <h2 className="text-4xl md:text-5xl font-black font-cairo mb-3 uppercase tracking-widest text-emerald-400 drop-shadow-[0_0_15px_rgba(16,185,129,0.35)]">
                     انتهاء المهمة الأمنية بنجاح
                   </h2>
-                  <p className="text-lg md:text-xl font-bold text-white">
+                  <p className="text-lg md:text-xl font-bold text-white mb-6">
                     فوز الفريق الكاسح:{" "}
                     <span className={`font-black uppercase tracking-wider font-orbitron ${winner === "RED" ? "text-red-500 glow-text-red" : "text-cyan-400 glow-text-blue"}`}>
                       {winner === "RED" ? "الأحمر" : "الأزرق"}
                     </span>
                   </p>
-                  <div className="mt-6 flex justify-center">
+                  
+                  {host === socket.id && (
+                    <button
+                      onClick={() => socket.emit("return-to-lobby", { roomCode })}
+                      onMouseEnter={() => gameAudio.playHover()}
+                      className="py-3 px-8 rounded-2xl bg-gradient-to-r from-cyan-600 to-cyan-800 hover:from-cyan-500 hover:to-cyan-700 text-slate-950 font-black tracking-wider transition-all shadow-[0_4px_15px_rgba(6,182,212,0.2)] hover:shadow-[0_0_20px_rgba(6,182,212,0.4)] cursor-pointer font-cairo text-sm mb-2"
+                    >
+                      اللعب مجدداً / العودة للقاعة
+                    </button>
+                  )}
+                  
+                  <div className="mt-4 flex justify-center">
                     <div className="h-1 w-32 bg-gradient-to-r from-transparent via-emerald-500 to-transparent"></div>
                   </div>
                 </div>
               )}
 
               {/* THREE-COLUMN GRID GAME BOARD */}
-              <div className="w-full grid grid-cols-1 lg:grid-cols-[240px_1fr_240px] gap-4 items-start">
+              <div className="w-full grid grid-cols-1 lg:grid-cols-[170px_1fr_170px] gap-3 items-start">
                 
                 {/* 1) RED TEAM Panel (Displays right in RTL) */}
                 {RedTeamPanel}
 
-                {/* 2) MAIN 5x5 BOARD GRID (In Center) */}
-                <div className="order-1 lg:order-none flex flex-col gap-4 w-full max-w-5xl mx-auto min-w-0 px-2 sm:px-4">
-                  <div className="p-3 sm:p-4 md:p-5 rounded-3xl bg-slate-950/60 border border-slate-900 shadow-[inset_0_0_30px_rgba(0,0,0,0.8)] backdrop-blur-sm">
-                    <div className={`grid ${gridColsClass} gap-2 sm:gap-2.5 md:gap-3`}>
+                {/* 2) MAIN 6-COLUMN BOARD GRID (In Center) */}
+                <div className="order-1 lg:order-none flex flex-col gap-4 w-full max-w-6xl mx-auto min-w-0">
+                  <div className="p-2 sm:p-3 rounded-3xl bg-slate-950/60 border border-slate-900 shadow-[inset_0_0_30px_rgba(0,0,0,0.8)] backdrop-blur-sm">
+                    <div className="grid gap-2 sm:gap-2.5" style={{ gridTemplateColumns: "repeat(6, minmax(0, 1fr))" }}>
                       {board.map((card, index) => {
                         const isCardRevealed = card.revealed
                         const isPlayerSpymaster = playerRole && playerRole.role === "spymaster"

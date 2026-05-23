@@ -2,6 +2,19 @@ import { useState } from "react";
 import { gameAudio } from "../audio";
 import { socket } from "../socket";
 
+// ─── Fluid Font Auto-Scaling Helper ─────────────────────────────────────────
+const getWordFontSize = (text) => {
+  if (!text) return {};
+  const len = text.length;
+  // fluid responsive clamp so words never overflow card boundaries
+  if (len > 10) {
+    return { fontSize: "clamp(10px, 2.5vw, 13px)", lineHeight: "1.2" };
+  } else if (len > 7) {
+    return { fontSize: "clamp(11px, 2.8vw, 15px)", lineHeight: "1.3" };
+  }
+  return { fontSize: "clamp(13px, 3.2vw, 17px)", lineHeight: "1.4" };
+};
+
 // ─── Skull SVG for Assassin card ───────────────────────────────────────────
 const SkullIcon = ({ size = "w-10 h-10", opacity = "opacity-70" }) => (
   <svg
@@ -90,7 +103,7 @@ function Card({ card, onFirstClick, onConfirmClick, disabled, playerRole, select
             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
             <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500" />
           </span>
-          <span className="text-[10px] font-black text-emerald-400 font-cairo tracking-wide">اضغط ✓ للتأكيد</span>
+          <span className="text-[10px] font-black text-emerald-400 font-cairo tracking-wide">تأكيد؟</span>
         </div>
       );
     }
@@ -116,7 +129,7 @@ function Card({ card, onFirstClick, onConfirmClick, disabled, playerRole, select
         <div
           className="assassin-pulse relative flex flex-col items-center justify-center rounded-2xl overflow-hidden border-2 border-red-900/60 cursor-default"
           style={{
-            aspectRatio: "3/4",
+            aspectRatio: "1.5",
             background: "linear-gradient(160deg, #050000 0%, #0a0002 50%, #050000 100%)",
           }}
         >
@@ -134,11 +147,11 @@ function Card({ card, onFirstClick, onConfirmClick, disabled, playerRole, select
                 "repeating-linear-gradient(-45deg, rgba(200,0,0,0.4) 0px, transparent 1px, transparent 8px, rgba(200,0,0,0.4) 9px)",
             }}
           />
-          <div className="relative z-10 flex flex-col items-center gap-2 mb-5">
-            <SkullIcon size="w-10 h-10" opacity="opacity-80" />
+          <div className="relative z-10 flex flex-col items-center gap-1 pb-3">
+            <SkullIcon size="w-7 h-7" opacity="opacity-80" />
             <span
               className="text-sm sm:text-base font-cairo font-black text-red-400/70 tracking-widest line-through decoration-red-700"
-              style={{ textShadow: "0 0 10px rgba(180,0,0,0.5)" }}
+              style={{ textShadow: "0 0 10px rgba(180,0,0,0.5)", ...getWordFontSize(card.text) }}
             >
               {card.text}
             </span>
@@ -153,7 +166,7 @@ function Card({ card, onFirstClick, onConfirmClick, disabled, playerRole, select
         <div
           className={`relative flex flex-col items-center justify-center rounded-2xl overflow-hidden border-2 border-red-500/80 ${showCheck ? "opacity-50" : ""}`}
           style={{
-            aspectRatio: "3/4",
+            aspectRatio: "1.5",
             background: "linear-gradient(160deg, #3b0015 0%, #1a0008 40%, #2d000f 100%)",
             boxShadow: "0 0 20px rgba(255,30,80,0.3), inset 0 0 30px rgba(180,0,40,0.2)",
           }}
@@ -163,10 +176,10 @@ function Card({ card, onFirstClick, onConfirmClick, disabled, playerRole, select
           <div className="absolute top-0 left-0 w-full h-0.5 bg-gradient-to-r from-transparent via-red-500/70 to-transparent" />
           <div className="absolute inset-0 bg-gradient-to-t from-red-950/50 to-transparent pointer-events-none" />
           <span
-            className="relative z-10 font-cairo font-black text-red-100 tracking-wide flex flex-col items-center gap-1.5 px-2 text-center mb-5"
-            style={{ textShadow: "0 0 15px rgba(255,80,100,0.5)" }}
+            className="relative z-10 font-cairo font-black text-red-100 tracking-wide flex flex-col items-center gap-1 px-2 text-center pb-3"
+            style={{ textShadow: "0 0 15px rgba(255,80,100,0.5)", ...getWordFontSize(card.text) }}
           >
-            <span className="text-sm sm:text-base md:text-lg">{card.text}</span>
+            <span>{card.text}</span>
             {showCheck && (
               <span className="text-emerald-400 drop-shadow-[0_0_8px_rgba(16,185,129,0.8)] text-base">✓</span>
             )}
@@ -181,7 +194,7 @@ function Card({ card, onFirstClick, onConfirmClick, disabled, playerRole, select
         <div
           className={`relative flex flex-col items-center justify-center rounded-2xl overflow-hidden border-2 border-cyan-500/80 ${showCheck ? "opacity-50" : ""}`}
           style={{
-            aspectRatio: "3/4",
+            aspectRatio: "1.5",
             background: "linear-gradient(160deg, #001828 0%, #000d1a 40%, #001020 100%)",
             boxShadow: "0 0 20px rgba(0,200,255,0.25), inset 0 0 30px rgba(0,80,140,0.2)",
           }}
@@ -191,10 +204,10 @@ function Card({ card, onFirstClick, onConfirmClick, disabled, playerRole, select
           <div className="absolute top-0 left-0 w-full h-0.5 bg-gradient-to-r from-transparent via-cyan-400/70 to-transparent" />
           <div className="absolute inset-0 bg-gradient-to-t from-blue-950/50 to-transparent pointer-events-none" />
           <span
-            className="relative z-10 font-cairo font-black text-cyan-100 tracking-wide flex flex-col items-center gap-1.5 px-2 text-center mb-5"
-            style={{ textShadow: "0 0 15px rgba(0,220,255,0.5)" }}
+            className="relative z-10 font-cairo font-black text-cyan-100 tracking-wide flex flex-col items-center gap-1 px-2 text-center pb-3"
+            style={{ textShadow: "0 0 15px rgba(0,220,255,0.5)", ...getWordFontSize(card.text) }}
           >
-            <span className="text-sm sm:text-base md:text-lg">{card.text}</span>
+            <span>{card.text}</span>
             {showCheck && (
               <span className="text-emerald-400 drop-shadow-[0_0_8px_rgba(16,185,129,0.8)] text-base">✓</span>
             )}
@@ -209,13 +222,13 @@ function Card({ card, onFirstClick, onConfirmClick, disabled, playerRole, select
       <div
         className="relative flex flex-col items-center justify-center rounded-2xl overflow-hidden border border-slate-700/40"
         style={{
-          aspectRatio: "3/4",
+          aspectRatio: "1.4",
           background: "linear-gradient(160deg, #1a1f2e 0%, #111520 100%)",
         }}
       >
         <CornerDots color="bg-slate-700/40" />
         <HudBrackets colorClass="border-slate-700/30" />
-        <span className="relative z-10 font-cairo font-medium text-slate-500 text-sm sm:text-base px-2 text-center mb-5">
+        <span className="relative z-10 font-cairo font-medium text-slate-500 text-sm sm:text-base px-2 text-center pb-3" style={getWordFontSize(card.text)}>
           {card.text}
         </span>
         <BottomLabel label="NEUTRAL" dotColor="bg-slate-600/50" textColor="text-slate-600/50" />
@@ -234,7 +247,7 @@ function Card({ card, onFirstClick, onConfirmClick, disabled, playerRole, select
         <div
           className="assassin-pulse relative flex flex-col items-center justify-center rounded-2xl overflow-hidden border-2 border-red-950/80 cursor-default"
           style={{
-            aspectRatio: "3/4",
+            aspectRatio: "1.5",
             background: "linear-gradient(160deg, #050000 0%, #0a0002 50%, #050000 100%)",
           }}
         >
@@ -247,9 +260,9 @@ function Card({ card, onFirstClick, onConfirmClick, disabled, playerRole, select
                 "repeating-linear-gradient(-45deg, rgba(180,0,0,0.3) 0px, transparent 1px, transparent 8px, rgba(180,0,0,0.3) 9px)",
             }}
           />
-          <div className="relative z-10 flex flex-col items-center gap-2 mb-5">
-            <SkullIcon size="w-8 h-8" opacity="opacity-50" />
-            <span className="text-sm font-cairo font-black text-red-800/70 tracking-wide px-2 text-center">
+          <div className="relative z-10 flex flex-col items-center gap-1 pb-3">
+            <SkullIcon size="w-6 h-6" opacity="opacity-50" />
+            <span className="text-sm font-cairo font-black text-red-800/70 tracking-wide px-2 text-center" style={getWordFontSize(card.text)}>
               {card.text}
             </span>
           </div>
@@ -261,16 +274,17 @@ function Card({ card, onFirstClick, onConfirmClick, disabled, playerRole, select
     if (isRed) {
       return (
         <div
-          className="relative flex flex-col items-center justify-center rounded-2xl overflow-hidden border-2 cursor-default"
+          className="relative flex flex-col items-center justify-center rounded-2xl overflow-hidden border-2 cursor-default transition-opacity duration-300"
           style={{
-            aspectRatio: "3/4",
+            aspectRatio: "1.5",
             background: isOwnTarget
               ? "linear-gradient(160deg, #2a0010 0%, #150008 50%, #1e0008 100%)"
               : "linear-gradient(160deg, #180008 0%, #0e0004 100%)",
-            borderColor: isOwnTarget ? "rgba(239,68,68,0.65)" : "rgba(127,29,29,0.4)",
+            borderColor: isOwnTarget ? "rgba(239,68,68,0.75)" : "rgba(127,29,29,0.2)",
             boxShadow: isOwnTarget
-              ? "0 0 18px rgba(255,40,80,0.2), inset 0 0 20px rgba(120,0,30,0.15)"
+              ? "0 0 18px rgba(255,40,80,0.25), inset 0 0 20px rgba(120,0,30,0.15)"
               : "none",
+            opacity: isOwnTarget ? 1 : 0.55,
           }}
         >
           {isOwnTarget && (
@@ -279,8 +293,8 @@ function Card({ card, onFirstClick, onConfirmClick, disabled, playerRole, select
           <CornerDots color={isOwnTarget ? "bg-red-400/60" : "bg-red-900/30"} />
           <HudBrackets colorClass={isOwnTarget ? "border-red-400/50" : "border-red-900/30"} />
           <span
-            className={`relative z-10 font-cairo font-bold text-sm sm:text-base tracking-wide px-2 text-center mb-5 ${isOwnTarget ? "text-red-200" : "text-red-400/60"}`}
-            style={isOwnTarget ? { textShadow: "0 0 12px rgba(255,60,80,0.4)" } : {}}
+            className={`relative z-10 font-cairo font-bold text-sm sm:text-base tracking-wide px-2 text-center pb-3 ${isOwnTarget ? "text-red-200" : "text-red-400/40"}`}
+            style={isOwnTarget ? { textShadow: "0 0 12px rgba(255,60,80,0.4)", ...getWordFontSize(card.text) } : getWordFontSize(card.text)}
           >
             {card.text}
           </span>
@@ -296,16 +310,17 @@ function Card({ card, onFirstClick, onConfirmClick, disabled, playerRole, select
     if (isBlue) {
       return (
         <div
-          className="relative flex flex-col items-center justify-center rounded-2xl overflow-hidden border-2 cursor-default"
+          className="relative flex flex-col items-center justify-center rounded-2xl overflow-hidden border-2 cursor-default transition-opacity duration-300"
           style={{
-            aspectRatio: "3/4",
+            aspectRatio: "1.5",
             background: isOwnTarget
               ? "linear-gradient(160deg, #001525 0%, #000b14 50%, #001020 100%)"
               : "linear-gradient(160deg, #000c15 0%, #000608 100%)",
-            borderColor: isOwnTarget ? "rgba(34,211,238,0.6)" : "rgba(22,78,99,0.4)",
+            borderColor: isOwnTarget ? "rgba(34,211,238,0.7)" : "rgba(22,78,99,0.2)",
             boxShadow: isOwnTarget
-              ? "0 0 18px rgba(0,200,255,0.2), inset 0 0 20px rgba(0,60,100,0.15)"
+              ? "0 0 18px rgba(0,200,255,0.25), inset 0 0 20px rgba(0,60,100,0.15)"
               : "none",
+            opacity: isOwnTarget ? 1 : 0.55,
           }}
         >
           {isOwnTarget && (
@@ -314,8 +329,8 @@ function Card({ card, onFirstClick, onConfirmClick, disabled, playerRole, select
           <CornerDots color={isOwnTarget ? "bg-cyan-400/60" : "bg-cyan-900/30"} />
           <HudBrackets colorClass={isOwnTarget ? "border-cyan-400/50" : "border-cyan-900/30"} />
           <span
-            className={`relative z-10 font-cairo font-bold text-sm sm:text-base tracking-wide px-2 text-center mb-5 ${isOwnTarget ? "text-cyan-100" : "text-cyan-400/60"}`}
-            style={isOwnTarget ? { textShadow: "0 0 12px rgba(0,220,255,0.4)" } : {}}
+            className={`relative z-10 font-cairo font-bold text-sm sm:text-base tracking-wide px-2 text-center pb-3 ${isOwnTarget ? "text-cyan-100" : "text-cyan-400/40"}`}
+            style={isOwnTarget ? { textShadow: "0 0 12px rgba(0,220,255,0.4)", ...getWordFontSize(card.text) } : getWordFontSize(card.text)}
           >
             {card.text}
           </span>
@@ -331,21 +346,22 @@ function Card({ card, onFirstClick, onConfirmClick, disabled, playerRole, select
     // Neutral spymaster
     return (
       <div
-        className="relative flex flex-col items-center justify-center rounded-2xl overflow-hidden border border-slate-700/30 cursor-default"
+        className="relative flex flex-col items-center justify-center rounded-2xl overflow-hidden border border-slate-700/30 cursor-default opacity-50"
         style={{
-          aspectRatio: "3/4",
+          aspectRatio: "1.4",
           background: "linear-gradient(160deg, #14161f 0%, #0e1018 100%)",
         }}
       >
         <CornerDots color="bg-slate-700/30" />
         <HudBrackets colorClass="border-slate-700/25" />
-        <span className="relative z-10 font-cairo font-medium text-slate-400/70 text-sm sm:text-base px-2 text-center mb-5">
+        <span className="relative z-10 font-cairo font-medium text-slate-400/70 text-sm sm:text-base px-2 text-center pb-3" style={getWordFontSize(card.text)}>
           {card.text}
         </span>
         <BottomLabel label="NEUTRAL" dotColor="bg-slate-600/40" textColor="text-slate-600/40" />
       </div>
     );
   }
+
 
   // ════════════════════════════════════════════════════════════════════════
   // NORMAL PLAYER VIEW — unrevealed, interactive
@@ -361,7 +377,7 @@ function Card({ card, onFirstClick, onConfirmClick, disabled, playerRole, select
         <button
           onClick={(e) => { e.stopPropagation(); onConfirmClick(); }}
           title="تأكيد الاختيار"
-          className="absolute -top-3 -left-3 w-8 h-8 rounded-full bg-emerald-500 hover:bg-emerald-400 active:bg-emerald-600 flex items-center justify-center text-slate-950 font-black text-base border-2 border-emerald-400 shadow-[0_0_18px_rgba(16,185,129,0.9)] z-30 cursor-pointer transition-all duration-150 hover:scale-110 active:scale-95 animate-bounce-subtle"
+          className="absolute top-2 left-2 w-6 h-6 rounded-full bg-emerald-500 hover:bg-emerald-400 active:bg-emerald-600 flex items-center justify-center text-slate-950 font-black text-xs border border-emerald-400 shadow-[0_0_12px_rgba(16,185,129,0.8)] z-30 cursor-pointer transition-all duration-150 hover:scale-105 active:scale-95 animate-bounce-subtle"
         >
           ✓
         </button>
@@ -383,7 +399,7 @@ function Card({ card, onFirstClick, onConfirmClick, disabled, playerRole, select
           }
         `}
         style={{
-          aspectRatio: "3/4",
+          aspectRatio: "1.4",
           background: hasSelection
             ? currentTurn === "blue"
               ? "linear-gradient(160deg, #001525 0%, #000d1a 100%)"
@@ -438,11 +454,11 @@ function Card({ card, onFirstClick, onConfirmClick, disabled, playerRole, select
             relative z-10 font-cairo font-bold tracking-wide
             text-base sm:text-lg md:text-xl
             transition-all duration-200 px-2 text-center
-            leading-snug mb-5
+            leading-snug pb-3
             ${!disabled && !hasSelection ? "group-hover:scale-105" : ""}
             ${isMySelection ? "text-emerald-100" : disabled ? "text-slate-600" : "text-slate-100"}
           `}
-          style={!disabled && !isMySelection ? { textShadow: "0 1px 8px rgba(0,0,0,0.9)" } : {}}
+          style={!disabled && !isMySelection ? { textShadow: "0 1px 8px rgba(0,0,0,0.9)", ...getWordFontSize(card.text) } : getWordFontSize(card.text)}
         >
           {card.text}
         </span>

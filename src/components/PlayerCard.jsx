@@ -38,7 +38,7 @@ export default function PlayerCard({ name, isYou, role, team }) {
     
     // Sleek scientific code representation:
     const code = isSpymaster ? 'INTEL' : (isUnassigned ? 'UNASSG' : 'FIELD_OP')
-    const label = isSpymaster ? 'قائد استخبارات' : (isUnassigned ? 'غير معين' : 'عميل ميداني')
+    const label = isSpymaster ? 'قائد' : (isUnassigned ? 'معلق' : 'عميل')
     
     const badgeStyle  = isSpymaster
       ? 'bg-amber-500/10 text-amber-300 border-amber-500/30'
@@ -53,7 +53,7 @@ export default function PlayerCard({ name, isYou, role, team }) {
   }
 
   return (
-    <div className={`relative flex items-center gap-3 p-3.5 rounded-2xl border transition-all duration-300 ${cardStyle} hover:-translate-y-0.5 hover:shadow-lg group overflow-hidden`}>
+    <div className={`relative flex items-center gap-2 p-2 rounded-xl border transition-all duration-300 ${cardStyle} hover:-translate-y-0.5 hover:shadow-lg group overflow-hidden`}>
       {/* Inner reflection sweep */}
       <span className="absolute inset-0 bg-gradient-to-b from-white/[0.02] to-transparent rounded-2xl pointer-events-none"></span>
       <span className="absolute inset-0 bg-gradient-to-r from-transparent via-white/[0.015] to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-1000 ease-out pointer-events-none"></span>
@@ -69,7 +69,7 @@ export default function PlayerCard({ name, isYou, role, team }) {
       </span>
 
       {/* Avatar with digital scanning visual overlay */}
-      <div className={`relative w-11 h-11 rounded-xl flex items-center justify-center text-white font-black text-base font-orbitron select-none ${avatarBg} ${avatarRing} overflow-hidden transition-all duration-300 group-hover:scale-105`}>
+      <div className={`relative w-8 h-8 rounded-lg flex items-center justify-center text-white font-black text-xs font-orbitron select-none ${avatarBg} ${avatarRing} overflow-hidden transition-all duration-300 group-hover:scale-105`}>
         {/* Inner glow reflection */}
         <span className="absolute inset-0 bg-gradient-to-b from-white/10 to-transparent pointer-events-none z-10"></span>
         
@@ -99,7 +99,7 @@ export default function PlayerCard({ name, isYou, role, team }) {
         </div>
         
         {roleBadge && (
-          <div className="mt-1.5">{roleBadge}</div>
+          <div className="mt-0.5">{roleBadge}</div>
         )}
       </div>
     </div>

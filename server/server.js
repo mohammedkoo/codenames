@@ -1,4 +1,4 @@
-const { generateBoard } = require("./shared/generateBoard")
+const { generateBoard, shuffle } = require("./shared/generateBoard")
 const express = require("express")
 const http = require("http")
 const { Server } = require("socket.io")
@@ -17,6 +17,72 @@ const io = new Server(server, {
 })
 
 const rooms = {}
+
+const speedTimes = {
+    fast: 30,
+    medium: 60,
+    slow: 90
+}
+
+function startTurnTimer(roomCode) {
+    const room = rooms[roomCode]
+    if (!room) return
+
+    if (room.timerInterval) {
+        clearInterval(room.timerInterval)
+        room.timerInterval = null
+    }
+
+    if (room.gameOver) return
+
+    const speed = room.speed || "medium"
+    const duration = speedTimes[speed] || 60
+    room.timeLeft = duration
+
+    // Broadcast initial tick
+    io.to(roomCode).emit("timer-updated", room.timeLeft)
+
+    room.timerInterval = setInterval(() => {
+        const activeRoom = rooms[roomCode]
+        if (!activeRoom || activeRoom.gameOver) {
+            if (activeRoom && activeRoom.timerInterval) {
+                clearInterval(activeRoom.timerInterval)
+                activeRoom.timerInterval = null
+            }
+            return
+        }
+
+        activeRoom.timeLeft--
+        io.to(roomCode).emit("timer-updated", activeRoom.timeLeft)
+
+        if (activeRoom.timeLeft <= 0) {
+            clearInterval(activeRoom.timerInterval)
+            activeRoom.timerInterval = null
+
+            // Switch turn
+            activeRoom.currentTurn = activeRoom.currentTurn === "red" ? "blue" : "red"
+            activeRoom.currentSpymaster = activeRoom.spymasters[activeRoom.currentTurn] || null
+            activeRoom.currentClue = { word: null, number: null }
+            activeRoom.selections = {}
+
+            io.to(roomCode).emit("turn-updated", activeRoom.currentTurn)
+            io.to(roomCode).emit("current-spymaster-updated", activeRoom.currentSpymaster)
+            io.to(roomCode).emit("clue-updated", activeRoom.currentClue)
+            io.to(roomCode).emit("selections-cleared")
+
+            // Start timer for new turn
+            startTurnTimer(roomCode)
+        }
+    }, 1000)
+}
+
+function stopTurnTimer(roomCode) {
+    const room = rooms[roomCode]
+    if (room && room.timerInterval) {
+        clearInterval(room.timerInterval)
+        room.timerInterval = null
+    }
+}
 
 io.on("connection", (socket) => {
     console.log("User connected:", socket.id)
@@ -61,7 +127,9 @@ io.on("connection", (socket) => {
             roomState: "lobby",
             // card selection state: { [cardIndex]: { playerId, playerName } }
             selections: {},
-            pack: "standard"
+            pack: "standard",
+            speed: "medium",
+            timeLeft: 60
         }
 
         socket.join(roomCode)
@@ -133,6 +201,9 @@ io.on("connection", (socket) => {
             "turn-updated",
             room.currentTurn
         )
+
+        // Send current timer value to the newly joined player
+        socket.emit("timer-updated", room.timeLeft)
 
         // Send current teams to the newly joined player
         socket.emit("teams-updated", room.teams)
@@ -356,18 +427,28 @@ io.on("connection", (socket) => {
             return
         }
 
+        const redSpymaster = room.spymasters.red
+        const blueSpymaster = room.spymasters.blue
+        const redOperatives = room.teams.red.filter(id => id !== redSpymaster)
+        const blueOperatives = room.teams.blue.filter(id => id !== blueSpymaster)
+
         // must have spymasters and at least one player per team
-        if (!room.spymasters.red || !room.spymasters.blue) {
+        if (!redSpymaster || !blueSpymaster) {
             socket.emit("start-game-failed", "missing-spymasters")
             return
         }
 
-        if (room.teams.red.length === 0 || room.teams.blue.length === 0) {
-            socket.emit("start-game-failed", "teams-incomplete")
+        if (redOperatives.length === 0 || blueOperatives.length === 0) {
+            socket.emit("start-game-failed", "missing-operatives")
             return
         }
 
         room.roomState = "playing"
+        room.board = generateBoard(room.pack) // ALWAYS generate a fresh board on game start!
+        room.gameOver = false
+        room.winner = null
+        room.currentTurn = "red"
+        room.currentClue = { word: null, number: null }
         // Clear any pending selections when game starts
         room.selections = {}
 
@@ -385,6 +466,8 @@ io.on("connection", (socket) => {
         io.to(roomCode).emit("turn-updated", room.currentTurn)
         io.to(roomCode).emit("teams-updated", room.teams)
         io.to(roomCode).emit("spymasters-updated", room.spymasters)
+        io.to(roomCode).emit("selections-cleared")
+        io.to(roomCode).emit("clue-updated", room.currentClue)
         io.to(roomCode).emit("lobby-updated", {
             players: room.players,
             names: room.names,
@@ -392,8 +475,49 @@ io.on("connection", (socket) => {
             spymasters: room.spymasters,
             host: room.host,
             roomState: room.roomState,
-            pack: room.pack
+            pack: room.pack,
+            speed: room.speed
         })
+
+        // Authoritative Turn Timer
+        startTurnTimer(roomCode)
+    })
+
+    // ─────────────────────────────────────────
+    // RETURN TO LOBBY / PLAY AGAIN
+    // ─────────────────────────────────────────
+    socket.on("return-to-lobby", ({ roomCode }) => {
+        const room = rooms[roomCode]
+        if (!room) return
+        if (room.host !== socket.id) return // Only host can return to lobby
+
+        room.roomState = "lobby"
+        room.gameOver = false
+        room.winner = null
+        room.selections = {}
+        room.currentClue = { word: null, number: null }
+        room.board = generateBoard(room.pack) // Generate a brand new board!
+
+        // Stop the timer
+        stopTurnTimer(roomCode)
+
+        io.to(roomCode).emit("board-updated", room.board)
+        io.to(roomCode).emit("turn-updated", room.currentTurn)
+        io.to(roomCode).emit("selections-cleared")
+        io.to(roomCode).emit("clue-updated", room.currentClue)
+
+        io.to(roomCode).emit("lobby-updated", {
+            roomCode,
+            players: room.players,
+            names: room.names,
+            teams: room.teams,
+            spymasters: room.spymasters,
+            host: room.host,
+            roomState: room.roomState,
+            pack: room.pack,
+            speed: room.speed
+        })
+        console.log(`[SERVER] Room ${roomCode} returned to lobby. New board generated.`)
     })
 
     // ─────────────────────────────────────────
@@ -418,9 +542,14 @@ io.on("connection", (socket) => {
         const clueWord = typeof word === "string" ? word.trim() : null
         const clueNumber = Number.isInteger(number) ? number : parseInt(number, 10)
 
+        if (Number.isNaN(clueNumber) || clueNumber < 0 || clueNumber > 10) {
+            socket.emit("send-clue-failed", "invalid-number")
+            return
+        }
+
         room.currentClue = {
             word: clueWord || null,
-            number: Number.isNaN(clueNumber) ? null : clueNumber
+            number: clueNumber
         }
 
         io.to(roomCode).emit("clue-updated", room.currentClue)
@@ -489,6 +618,7 @@ io.on("connection", (socket) => {
 
             room.gameOver = true
             room.winner = winner
+            stopTurnTimer(roomCode)
 
             io.to(roomCode).emit(
                 "board-updated",
@@ -529,6 +659,7 @@ io.on("connection", (socket) => {
         if (redRemaining === 0) {
             room.gameOver = true
             room.winner = "RED"
+            stopTurnTimer(roomCode)
 
             io.to(roomCode).emit(
                 "board-updated",
@@ -550,6 +681,7 @@ io.on("connection", (socket) => {
         if (blueRemaining === 0) {
             room.gameOver = true
             room.winner = "BLUE"
+            stopTurnTimer(roomCode)
 
             io.to(roomCode).emit(
                 "board-updated",
@@ -593,9 +725,16 @@ io.on("connection", (socket) => {
             room.currentSpymaster = room.spymasters[room.currentTurn] || null
             io.to(roomCode).emit("current-spymaster-updated", room.currentSpymaster)
 
+            // Reset current clue on turn switch
+            room.currentClue = { word: null, number: null }
+            io.to(roomCode).emit("clue-updated", room.currentClue)
+
             // Clear all selections on turn switch
             room.selections = {}
             io.to(roomCode).emit("selections-cleared")
+
+            // Restart turn timer for new turn
+            startTurnTimer(roomCode)
         }
 
         // Clear selection for the revealed card
@@ -714,8 +853,8 @@ io.on("connection", (socket) => {
             const activeRoom = rooms[roomCode]
             if (!activeRoom) return
 
-            // Shuffle player list
-            const shuffledPlayers = [...activeRoom.players].sort(() => Math.random() - 0.5)
+            // Shuffle player list using Fisher-Yates
+            const shuffledPlayers = shuffle([...activeRoom.players])
 
             // Clear teams and spymasters
             activeRoom.teams.red = []
@@ -774,6 +913,60 @@ io.on("connection", (socket) => {
 
             console.log(`[SERVER] Delay-shuffled and randomized teams for room ${roomCode}`)
         }, 2000)
+    })
+
+    // ─────────────────────────────────────────
+    // SET GAME SPEED
+    // ─────────────────────────────────────────
+    socket.on("set-game-speed", ({ roomCode, speed }) => {
+        const room = rooms[roomCode]
+        if (!room) return
+        if (room.host !== socket.id) return
+        if (speed !== "fast" && speed !== "medium" && speed !== "slow") return
+
+        room.speed = speed
+        io.to(roomCode).emit("lobby-updated", {
+            roomCode,
+            players: room.players,
+            names: room.names,
+            teams: room.teams,
+            spymasters: room.spymasters,
+            host: room.host,
+            roomState: room.roomState,
+            pack: room.pack,
+            speed: room.speed
+        })
+        console.log(`[SERVER] Game speed changed to ${speed} for room ${roomCode}`)
+    })
+
+    // ─────────────────────────────────────────
+    // END TURN
+    // ─────────────────────────────────────────
+    socket.on("end-turn", ({ roomCode }) => {
+        const room = rooms[roomCode]
+        if (!room) return
+        if (room.gameOver) return
+
+        // Validate player is in the active turn team and is NOT the spymaster
+        const activeTeam = room.currentTurn
+        if (!room.teams[activeTeam].includes(socket.id)) return
+        if (room.spymasters[activeTeam] === socket.id) return
+
+        // Switch turn
+        room.currentTurn = room.currentTurn === "red" ? "blue" : "red"
+        room.currentSpymaster = room.spymasters[room.currentTurn] || null
+        room.currentClue = { word: null, number: null }
+        room.selections = {}
+
+        io.to(roomCode).emit("turn-updated", room.currentTurn)
+        io.to(roomCode).emit("current-spymaster-updated", room.currentSpymaster)
+        io.to(roomCode).emit("clue-updated", room.currentClue)
+        io.to(roomCode).emit("selections-cleared")
+
+        // Restart turn timer for new turn
+        startTurnTimer(roomCode)
+
+        console.log(`[SERVER] Turn ended early by player ${socket.id} in room ${roomCode}`)
     })
 
     // ─────────────────────────────────────────
