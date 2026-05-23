@@ -58,7 +58,10 @@ io.on("connection", (socket) => {
                 [socket.id]: null
             },
             host: socket.id,
-            roomState: "lobby"
+            roomState: "lobby",
+            // card selection state: { [cardIndex]: { playerId, playerName } }
+            selections: {},
+            pack: "standard"
         }
 
         socket.join(roomCode)
@@ -78,7 +81,8 @@ io.on("connection", (socket) => {
             teams: rooms[roomCode].teams,
             spymasters: rooms[roomCode].spymasters,
             host: rooms[roomCode].host,
-            roomState: rooms[roomCode].roomState
+            roomState: rooms[roomCode].roomState,
+            pack: rooms[roomCode].pack
         })
 
         console.log("Room created:", roomCode)
@@ -95,6 +99,13 @@ io.on("connection", (socket) => {
         if (!room) {
             console.warn(`[SERVER] join-room failed: roomCode=${roomCode} not found`)
             socket.emit("room-not-found")
+            return
+        }
+
+        // Enforce 6-player room limit
+        if (room.players.length >= 6 && !room.players.includes(socket.id)) {
+            console.warn(`[SERVER] join-room failed: roomCode=${roomCode} is full`)
+            socket.emit("room-full")
             return
         }
 
@@ -146,7 +157,8 @@ io.on("connection", (socket) => {
             teams: room.teams,
             spymasters: room.spymasters,
             host: room.host,
-            roomState: room.roomState
+            roomState: room.roomState,
+            pack: room.pack
         })
 
         console.log(`[SERVER] Player joined: socket.id=${socket.id}, roomCode=${roomCode}, playerTeam=${playerTeam}`)
@@ -207,7 +219,8 @@ io.on("connection", (socket) => {
             teams: room.teams,
             spymasters: room.spymasters,
             host: room.host,
-            roomState: room.roomState
+            roomState: room.roomState,
+            pack: room.pack
         })
     })
 
@@ -265,7 +278,8 @@ io.on("connection", (socket) => {
             teams: room.teams,
             spymasters: room.spymasters,
             host: room.host,
-            roomState: room.roomState
+            roomState: room.roomState,
+            pack: room.pack
         })
 
         console.log(`[SERVER] become-spymaster success: socket ${socket.id} is now ${team} spymaster`) 
@@ -291,7 +305,8 @@ io.on("connection", (socket) => {
             teams: room.teams,
             spymasters: room.spymasters,
             host: room.host,
-            roomState: room.roomState
+            roomState: room.roomState,
+            pack: room.pack
         })
         socket.emit("name-set", name)
     })
@@ -321,7 +336,8 @@ io.on("connection", (socket) => {
             teams: room.teams,
             spymasters: room.spymasters,
             host: room.host,
-            roomState: room.roomState
+            roomState: room.roomState,
+            pack: room.pack
         })
         socket.emit("player-team", null)
     })
@@ -352,6 +368,8 @@ io.on("connection", (socket) => {
         }
 
         room.roomState = "playing"
+        // Clear any pending selections when game starts
+        room.selections = {}
 
         // Broadcast start-game + current board and state
         io.to(roomCode).emit("game-started", {
@@ -373,7 +391,8 @@ io.on("connection", (socket) => {
             teams: room.teams,
             spymasters: room.spymasters,
             host: room.host,
-            roomState: room.roomState
+            roomState: room.roomState,
+            pack: room.pack
         })
     })
 
@@ -573,6 +592,16 @@ io.on("connection", (socket) => {
             // update current spymaster for new turn
             room.currentSpymaster = room.spymasters[room.currentTurn] || null
             io.to(roomCode).emit("current-spymaster-updated", room.currentSpymaster)
+
+            // Clear all selections on turn switch
+            room.selections = {}
+            io.to(roomCode).emit("selections-cleared")
+        }
+
+        // Clear selection for the revealed card
+        if (room.selections[index]) {
+            delete room.selections[index]
+            io.to(roomCode).emit("card-deselected", { index })
         }
 
         // ─────────────────────────────────────
@@ -587,6 +616,164 @@ io.on("connection", (socket) => {
         console.log(
             "[SERVER] board-updated emitted"
         )
+    })
+
+    // ─────────────────────────────────────────
+    // SELECT CARD (First click - shows marker to all players)
+    // ─────────────────────────────────────────
+
+    socket.on("select-card", ({ roomCode, index }) => {
+        const room = rooms[roomCode]
+        if (!room) return
+        if (room.gameOver) return
+
+        const card = room.board[index]
+        if (!card || card.revealed) return
+
+        // Only active-turn team operatives can select
+        const isRed = room.teams.red.includes(socket.id)
+        const isBlue = room.teams.blue.includes(socket.id)
+        const playerTeam = isRed ? "red" : (isBlue ? "blue" : null)
+        if (!playerTeam || playerTeam !== room.currentTurn) return
+        if (room.spymasters.red === socket.id || room.spymasters.blue === socket.id) return
+
+        const playerName = room.names[socket.id] || "عميل"
+
+        // Remove any previous selection by this player
+        for (const idx in room.selections) {
+            if (room.selections[idx].playerId === socket.id) {
+                delete room.selections[idx]
+                io.to(roomCode).emit("card-deselected", { index: parseInt(idx) })
+            }
+        }
+
+        // Register new selection
+        room.selections[index] = { playerId: socket.id, playerName }
+        io.to(roomCode).emit("card-selected", { index, playerId: socket.id, playerName })
+        console.log(`[SERVER] card-selected: socket=${socket.id} name=${playerName} index=${index}`)
+    })
+
+    // ─────────────────────────────────────────
+    // DESELECT CARD
+    // ─────────────────────────────────────────
+
+    socket.on("deselect-card", ({ roomCode, index }) => {
+        const room = rooms[roomCode]
+        if (!room) return
+        if (!room.selections[index]) return
+        if (room.selections[index].playerId !== socket.id) return
+
+        delete room.selections[index]
+        io.to(roomCode).emit("card-deselected", { index })
+        console.log(`[SERVER] card-deselected: socket=${socket.id} index=${index}`)
+    })
+
+    // ─────────────────────────────────────────
+    // SET WORD PACK
+    // ─────────────────────────────────────────
+
+    socket.on("set-word-pack", ({ roomCode, pack }) => {
+        const room = rooms[roomCode]
+        if (!room) return
+        if (room.host !== socket.id) return
+
+        room.pack = pack
+        room.board = generateBoard(pack)
+        room.selections = {}
+
+        io.to(roomCode).emit("board-updated", room.board)
+        io.to(roomCode).emit("selections-cleared")
+        io.to(roomCode).emit("lobby-updated", {
+            roomCode,
+            players: room.players,
+            names: room.names,
+            teams: room.teams,
+            spymasters: room.spymasters,
+            host: room.host,
+            roomState: room.roomState,
+            pack: room.pack
+        })
+        console.log(`[SERVER] Word pack changed to ${pack} for room ${roomCode}`)
+    })
+
+    // ─────────────────────────────────────────
+    // RANDOMIZE TEAMS
+    // ─────────────────────────────────────────
+
+    socket.on("randomize-teams", ({ roomCode }) => {
+        const room = rooms[roomCode]
+        if (!room) return
+        if (room.host !== socket.id) return
+
+        // 1. Inform all players that shuffling has started so they can run their local spinning animations
+        io.to(roomCode).emit("randomizing-started")
+
+        // 2. Perform actual logic and broadcast final state after 2 seconds
+        setTimeout(() => {
+            // Re-verify room still exists
+            const activeRoom = rooms[roomCode]
+            if (!activeRoom) return
+
+            // Shuffle player list
+            const shuffledPlayers = [...activeRoom.players].sort(() => Math.random() - 0.5)
+
+            // Clear teams and spymasters
+            activeRoom.teams.red = []
+            activeRoom.teams.blue = []
+            activeRoom.spymasters.red = null
+            activeRoom.spymasters.blue = null
+
+            // Distribute evenly
+            shuffledPlayers.forEach((playerId, index) => {
+                if (index % 2 === 0) {
+                    activeRoom.teams.red.push(playerId)
+                } else {
+                    activeRoom.teams.blue.push(playerId)
+                }
+            })
+
+            // Assign spymasters (first member of each team)
+            if (activeRoom.teams.red.length > 0) {
+                activeRoom.spymasters.red = activeRoom.teams.red[0]
+            }
+            if (activeRoom.teams.blue.length > 0) {
+                activeRoom.spymasters.blue = activeRoom.teams.blue[0]
+            }
+
+            // Update current spymaster (for the team whose turn it is)
+            activeRoom.currentSpymaster = activeRoom.spymasters[activeRoom.currentTurn] || null
+
+            // Broadcast team status updates
+            io.to(roomCode).emit("teams-updated", activeRoom.teams)
+            io.to(roomCode).emit("spymasters-updated", activeRoom.spymasters)
+            io.to(roomCode).emit("current-spymaster-updated", activeRoom.currentSpymaster)
+
+            // Explicitly update individual players' roles and teams
+            activeRoom.players.forEach((playerId) => {
+                const clientSocket = io.sockets.sockets.get(playerId)
+                if (clientSocket) {
+                    const team = activeRoom.teams.red.includes(playerId) ? "red" : (activeRoom.teams.blue.includes(playerId) ? "blue" : null)
+                    const isSpymaster = activeRoom.spymasters.red === playerId || activeRoom.spymasters.blue === playerId
+                    const role = isSpymaster ? "spymaster" : "operative"
+                    clientSocket.emit("player-team", team)
+                    clientSocket.emit("player-role", { role, team })
+                }
+            })
+
+            // Broadcast lobby updated
+            io.to(roomCode).emit("lobby-updated", {
+                roomCode,
+                players: activeRoom.players,
+                names: activeRoom.names,
+                teams: activeRoom.teams,
+                spymasters: activeRoom.spymasters,
+                host: activeRoom.host,
+                roomState: activeRoom.roomState,
+                pack: activeRoom.pack
+            })
+
+            console.log(`[SERVER] Delay-shuffled and randomized teams for room ${roomCode}`)
+        }, 2000)
     })
 
     // ─────────────────────────────────────────
@@ -638,7 +825,8 @@ io.on("connection", (socket) => {
                     teams: room.teams,
                     spymasters: room.spymasters,
                     host: room.host,
-                    roomState: room.roomState
+                    roomState: room.roomState,
+                    pack: room.pack
                 })
 
                 console.log(`[SERVER] Cleaned up player ${socket.id} from room ${roomCode}`)
